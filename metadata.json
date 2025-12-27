@@ -1,0 +1,5 @@
+{
+  "name": "AutoStockSync",
+  "description": "A mobile-first dashboard to monitor and trigger stock data synchronization from Google Sheets. NOTE: Due to browser security restrictions, this app simulates the 'Write' operation. Real-world deployment requires a Google Apps Script backend to physically append data to your Sheets.",
+  "requestFramePermissions": []
+}
