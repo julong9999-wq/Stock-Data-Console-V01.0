@@ -4,12 +4,13 @@ import { SyncJob, JobStatus, LogEntry } from './types';
 import JobCard from './components/JobCard';
 import FeasibilityModal from './components/FeasibilityModal';
 import { analyzeDataSync, simulateWriteToSheet } from './services/dataService';
-import { Activity, PlayCircle, Terminal, Info, CheckCheck, Power, Zap } from 'lucide-react';
+import { Activity, PlayCircle, Terminal, Info, CheckCheck, Power, Zap, FileText } from 'lucide-react';
 
 const App: React.FC = () => {
   const [jobStatuses, setJobStatuses] = useState<Record<string, JobStatus>>({});
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [isModalOpen, setIsModalOpen] = useState(true);
+  // Initial state false to enter system directly
+  const [isModalOpen, setIsModalOpen] = useState(false);
   const [lastRunTimes, setLastRunTimes] = useState<Record<string, Date>>({});
   
   // Auto-Run State
@@ -148,11 +149,17 @@ const App: React.FC = () => {
               {isAutoMode ? '自動模式 ON' : '手動模式'}
             </button>
 
+            {/* Feasibility Report Button (Updated label) */}
             <button 
               onClick={() => setIsModalOpen(true)}
-              className={`p-2 rounded-full transition-colors ${isAutoMode ? 'text-slate-400 hover:text-white' : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'}`}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold transition-all border
+                ${isAutoMode 
+                  ? 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700 hover:text-white' 
+                  : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-indigo-600'}`}
             >
-              <Info className="w-6 h-6" />
+              <FileText className="w-3 h-3" />
+              <span className="hidden md:inline">軟體可行性評估報告 v3.0</span>
+              <span className="md:hidden">報告 v3.0</span>
             </button>
           </div>
         </div>

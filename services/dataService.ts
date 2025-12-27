@@ -8,14 +8,26 @@ declare const Papa: any;
  */
 const parseCSVString = (csvString: string): Promise<any[]> => {
   return new Promise((resolve, reject) => {
+    if (!csvString) {
+      resolve([]);
+      return;
+    }
+
+    // Advanced Validation: Check for HTML tags which indicate a login wall or error page
+    const trimmed = csvString.trim();
+    if (trimmed.startsWith('<!DOCTYPE') || trimmed.startsWith('<html') || trimmed.indexOf('<body') !== -1) {
+      reject(new Error("讀取到的是 HTML 網頁而非 CSV。原因可能是：1. 試算表未「發布到網路」 2. Google 暫時封鎖了此代理路徑 3. 需要登入權限"));
+      return;
+    }
+
     Papa.parse(csvString, {
       header: true,
       skipEmptyLines: true,
       complete: (results: any) => {
-        if (results.data && results.data.length > 0) {
+        if (results.data) {
           resolve(results.data);
         } else {
-          resolve([]); // Return empty array instead of failing hard, logic will handle empty later
+          resolve([]);
         }
       },
       error: (error: any) => {
@@ -26,70 +38,107 @@ const parseCSVString = (csvString: string): Promise<any[]> => {
 };
 
 /**
- * Fetches and parses a CSV from a public Google Sheet URL.
- * Includes CORS handling and Cache-Busting.
+ * Helper: Attempt to fetch from a URL with a timeout
  */
-export const fetchAndParseCSV = async (url: string): Promise<any[]> => {
-  // 1. Add timestamp to prevent mobile browser caching
-  const timestamp = new Date().getTime();
-  const urlWithCacheBuster = url.includes('?') 
-    ? `${url}&_t=${timestamp}` 
-    : `${url}?_t=${timestamp}`;
-
+const fetchWithTimeout = async (url: string, timeout = 25000): Promise<Response> => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
   try {
-    // Attempt 1: Direct Fetch
-    // Note: This often fails on mobile due to CORS if the sheet isn't perfectly public
-    const response = await fetch(urlWithCacheBuster, {
-      method: 'GET',
-      headers: { 'Accept': 'text/csv' }
+    const response = await fetch(url, { 
+      signal: controller.signal
     });
-    
-    if (!response.ok) {
-      throw new Error(`Direct Access Error (${response.status})`);
-    }
-    
-    const csvText = await response.text();
-    return await parseCSVString(csvText);
-
-  } catch (directError) {
-    console.warn("Direct fetch failed (likely CORS), switching to Proxy...", directError);
-
-    try {
-      // Attempt 2: Use a Public CORS Proxy (api.allorigins.win)
-      // This routes the request through a server that adds the correct headers
-      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(urlWithCacheBuster)}`;
-      
-      const proxyResponse = await fetch(proxyUrl);
-      if (!proxyResponse.ok) {
-        throw new Error(`Proxy Error (${proxyResponse.status})`);
-      }
-
-      const proxyCsvText = await proxyResponse.text();
-      return await parseCSVString(proxyCsvText);
-
-    } catch (proxyError: any) {
-      console.error("All fetch attempts failed", proxyError);
-      throw new Error(`連線失敗 (CORS/Network): 請檢查網路或連結權限`);
-    }
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    throw error;
   }
 };
 
 /**
+ * Fetches and parses a CSV from a public Google Sheet URL.
+ * Implements a 4-Layer "Aggressive" Fallback Strategy.
+ */
+export const fetchAndParseCSV = async (url: string): Promise<any[]> => {
+  const timestamp = new Date().getTime();
+  // Simply append timestamp. Do not use src param which caused 404s.
+  const char = url.includes('?') ? '&' : '?';
+  const urlWithTime = `${url}${char}_t=${timestamp}`;
+  
+  const errors: string[] = [];
+
+  // --- STRATEGY 1: CodeTabs Proxy (Often most reliable for raw text) ---
+  try {
+    const proxyUrl = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(urlWithTime)}`;
+    const response = await fetchWithTimeout(proxyUrl, 25000);
+    if (response.ok) {
+      const text = await response.text();
+      return await parseCSVString(text);
+    }
+    errors.push(`CodeTabs: ${response.status}`);
+  } catch (e: any) {
+    console.warn("Strategy 1 (CodeTabs) failed", e);
+    errors.push(`CodeTabs: ${e.message}`);
+  }
+
+  // --- STRATEGY 2: AllOrigins (JSON Mode) ---
+  try {
+    const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(urlWithTime)}`;
+    const response = await fetchWithTimeout(proxyUrl, 25000);
+    if (response.ok) {
+      const json = await response.json();
+      if (json.contents) {
+        return await parseCSVString(json.contents);
+      }
+    }
+    errors.push(`AllOrigins: ${response.status}`);
+  } catch (e: any) {
+    console.warn("Strategy 2 (AllOrigins) failed", e);
+    errors.push(`AllOrigins: ${e.message}`);
+  }
+
+  // --- STRATEGY 3: CorsProxy.io ---
+  try {
+    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(urlWithTime)}`;
+    const response = await fetchWithTimeout(proxyUrl, 15000);
+    if (response.ok) {
+      const text = await response.text();
+      return await parseCSVString(text);
+    }
+    errors.push(`CorsProxy: ${response.status}`);
+  } catch (e: any) {
+    console.warn("Strategy 3 (CorsProxy) failed", e);
+    errors.push(`CorsProxy: ${e.message}`);
+  }
+
+  // --- STRATEGY 4: Direct Fetch ---
+  try {
+    const response = await fetchWithTimeout(urlWithTime, 5000);
+    if (response.ok) {
+      const text = await response.text();
+      return await parseCSVString(text);
+    }
+  } catch (e: any) {
+    errors.push(`Direct: ${e.message}`);
+  }
+
+  // If all failed, throw a comprehensive error
+  throw new Error(`無法讀取資料。已嘗試 4 種連線路徑皆失敗。\n最後錯誤: ${errors[errors.length - 1]}`);
+};
+
+/**
  * Simulate the "Write" operation.
- * NOTE: In a real environment, this would call a Google Apps Script Web App
- * or use the Google Sheets API with OAuth.
  */
 export const simulateWriteToSheet = async (data: any[], job: SyncJob): Promise<string> => {
   return new Promise((resolve) => {
     setTimeout(() => {
       resolve(`Success: Appended ${data.length} new rows to ${job.name}`);
-    }, 1500); // Simulate network delay
+    }, 1500);
   });
 };
 
 /**
  * Main Logic: Compares source data with destination data.
- * Returns null if up to date, or the data that needs to be appended.
  */
 export const analyzeDataSync = async (
   job: SyncJob,
@@ -101,7 +150,7 @@ export const analyzeDataSync = async (
     const sourceData = await fetchAndParseCSV(job.sourceUrl);
     
     if (!sourceData || sourceData.length === 0) {
-      throw new Error("來源資料為空或無法讀取");
+      throw new Error("來源資料為空 (0筆)");
     }
     
     // Get the latest date from Source
@@ -109,7 +158,6 @@ export const analyzeDataSync = async (
     const sourceDate = lastSourceRow[job.targetDateColumn];
     
     if (!sourceDate) {
-       // Log available keys to help debugging
        const keys = Object.keys(lastSourceRow).join(', ');
        throw new Error(`找不到日期欄位: '${job.targetDateColumn}'。可用欄位: ${keys}`);
     }
@@ -119,7 +167,6 @@ export const analyzeDataSync = async (
     log(`[${job.name}] 正在比對存檔資料...`, 'info');
     const destData = await fetchAndParseCSV(job.destinationUrl);
     
-    // Check if the sourceDate already exists in destData
     const alreadyExists = destData.some((row: any) => row[job.targetDateColumn] === sourceDate);
 
     if (alreadyExists) {
@@ -131,7 +178,6 @@ export const analyzeDataSync = async (
     }
 
   } catch (err: any) {
-    // Clean up the error message for the UI
     const errorMsg = err.message || '未知連線錯誤';
     log(`[${job.name}] 錯誤: ${errorMsg}`, 'error');
     throw err;
